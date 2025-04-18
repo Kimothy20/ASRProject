@@ -1,92 +1,74 @@
-"""Utility script to convert commonvoice into wav and create the training and test json files for speechrecognition.
-
-
-"""
 import os
 import argparse
 import json
 import random
 import csv
 from pydub import AudioSegment
+from sox import SoxiError
 
 def main(args):
-    data = []
-    directory = args.file_path.rpartition('/')[0]
-    percent = args.percent
-    
-    with open(args.file_path) as f:
-        lenght = sum(1 for line in f)
-    
-    
-    
-    
-    with open(args.file_path, newline='') as csvfile: 
-        reader = csv.DictReader(csvfile, delimiter='\t')
-        index = 1
-        if(args.convert):
-            print(str(lenght) + "files found")
-        for row in reader:  
-            file_name = row['path']
-            filename = file_name.rpartition('.')[0] + ".wav"
-            text = row['sentence']
-            if(args.convert):
-                data.append({
-                "key": directory + "/clips/" + filename,
-                "text": text
-                })
-                print("converting file " + str(index) + "/" + str(lenght) + " to wav", end="\r")
-                src = directory + "/clips/" + file_name
-                dst = directory + "/clips/" + filename
-                sound = AudioSegment.from_mp3(src)
-                sound.export(dst, format="wav")
-                index = index + 1
-            else:
-                data.append({
-                "key": directory + "/clips/" + file_name,
-                "text": text
-                })
-                
-    random.shuffle(data)
-    print("creating JSON's")
-    f = open(args.save_json_path +"/"+ "train.json", "w")
-    
-    with open(args.save_json_path +"/"+ 'train.json','w') as f:
-        d = len(data)
-        i=0
-        while(i<int(d-d/percent)):
-            r=data[i]
-            line = json.dumps(r)
-            f.write(line + "\n")
-            i = i+1
-    
-    f = open(args.save_json_path +"/"+ "test.json", "w")
+    # ensure output dir exists
+    os.makedirs(args.save_json_path, exist_ok=True)
 
-    with open(args.save_json_path +"/"+ 'test.json','w') as f:
-        d = len(data)
-        i=int(d-d/percent)
-        while(i<d):
-            r=data[i]
-            line = json.dumps(r)
-            f.write(line + "\n")
-            i = i+1
+    total_lines = 0
+    with open(args.file_path, 'r', newline='') as f:
+        total_lines = sum(1 for _ in f)
+
+    clip_dir = os.path.join(os.path.dirname(args.file_path), "clips")
+    data = []
+    for idx, row in enumerate(csv.DictReader(open(args.file_path, newline=''), delimiter='\t'), start=1):
+        src_name = row['path']
+        text     = row['sentence']
+        src_path = os.path.join(clip_dir, src_name)
+
+        if args.convert:
+            # build new .wav name
+            base, _ = os.path.splitext(src_name)
+            dst_name = base + ".wav"
+            dst_path = os.path.join(clip_dir, dst_name)
+
+            try:
+                ext = os.path.splitext(src_path)[1].lower().lstrip('.')
+                sound = AudioSegment.from_file(src_path, format=ext)
+                sound.export(dst_path, format="wav")
+            except SoxiError as e:
+                print(f"\n[Warning] Skipping {src_name}: {e}")
+                continue
+
+            data.append({"key": dst_path, "text": text})
+            print(f"\rConverting {idx}/{total_lines} → {dst_name}", end="", flush=True)
+        else:
+            data.append({"key": src_path, "text": text})
+
+    print("\nShuffling and splitting data…")
+    random.shuffle(data)
+
+    n = len(data)
+    split = int(n * (1 - args.percent/100.0))
+
+    train = data[:split]
+    test  = data[split:]
+
+    for name, subset in [("train.json", train), ("test.json", test)]:
+        out_path = os.path.join(args.save_json_path, name)
+        with open(out_path, 'w', encoding='utf8') as j:
+            for entry in subset:
+                j.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
     print("Done!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="""
-    Utility script to convert commonvoice into wav and create the training and test json files for speechrecognition. """
+    parser = argparse.ArgumentParser(
+        description="Convert CommonVoice clips to WAV and produce train/test JSONs."
     )
-    parser.add_argument('--file_path', type=str, default=None, required=True,
-                        help='path to one of the .tsv files found in cv-corpus')
-    parser.add_argument('--save_json_path', type=str, default=None, required=True,
-                        help='path to the dir where the json files are supposed to be saved')
-    parser.add_argument('--percent', type=int, default=10, required=False,
-                        help='percent of clips put into test.json instead of train.json')
-    parser.add_argument('--convert', default=True, action='store_true',
-                        help='says that the script should convert mp3 to wav')
-    parser.add_argument('--not-convert', dest='convert', action='store_false',
-                        help='says that the script should not convert mp3 to wav')
-
-    
+    parser.add_argument('--file_path',       required=True, help='path to the .tsv file')
+    parser.add_argument('--save_json_path',  required=True, help='directory to save JSONs')
+    parser.add_argument('--percent',  type=int, default=10, help='percentage for test set (0–100)')
+    parser.add_argument('--convert', action='store_true', default=False,
+                        help='whether to convert to WAV; if omitted, just splits JSON')
     args = parser.parse_args()
+
+    if not (0 < args.percent < 100):
+        parser.error("--percent must be between 1 and 99")
 
     main(args)

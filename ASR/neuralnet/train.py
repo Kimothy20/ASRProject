@@ -5,9 +5,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import lightning as L
-from lightning.pytorch.demos import Transformer
-from pytorch_lightning import Trainer
+import pytorch_lightning as pl
+from pytorch_lightning import Trainer, LightningModule
 from argparse import ArgumentParser
 from model import SpeechRecognition
 from dataset import Data, collate_fn_padd
@@ -15,7 +14,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 
-class SpeechModule(L.LightningModule):
+class SpeechModule(LightningModule):
 
     def __init__(self, model, args):
         super(SpeechModule, self).__init__()
@@ -27,11 +26,22 @@ class SpeechModule(L.LightningModule):
         return self.model(x, hidden)
 
     def configure_optimizers(self):
-        self.optimizer = optim.AdamW(self.model.parameters(), self.args.learning_rate)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                                        self.optimizer, mode='min',
-                                        factor=0.50, patience=6)
-        return [self.optimizer], [self.scheduler]
+        optimizer = optim.AdamW(self.model.parameters(), self.args.learning_rate)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        	optimizer, mode="min", factor=0.5, patience=6
+        )
+
+	self.optimizer = optimizer
+        self.scheduler = scheduler
+	    
+        return {
+		"optimizer": optimizer,
+		"lr_scheduler": {
+			"scheduler": scheduler,
+			"monitor": "val_loss",
+			"interval": "epoch",
+		}
+	} 
 
     def step(self, batch):
         spectrograms, labels, input_lengths, label_lengths = batch 
@@ -45,8 +55,9 @@ class SpeechModule(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss = self.step(batch)
-        logs = {'loss': loss, 'lr': self.optimizer.param_groups[0]['lr'] }
-        return {'loss': loss, 'log': logs}
+        self.log("train_loss", loss, on_step=True, on_epoch=True)
+	self.log("lr", self.optimizer.param_groups[0]['lr'], on_step=True)
+        return loss
 
     def train_dataloader(self):
         d_params = Data.parameters
@@ -80,14 +91,15 @@ class SpeechModule(L.LightningModule):
 
 
 def checkpoint_callback(args):
-    return ModelCheckpoint(
-        filepath=args.save_model_path,
-        save_top_k=True,
-        verbose=True,
-        monitor='val_loss',
-        mode='min',
-        prefix=''
-    )
+    	output_dir, fname = os.path.split(args.save_model_path)
+	return ModelCheckpoint(
+		dirpath=output_dir or ".", 
+		filename=fname,
+        	save_top_k=1,
+        	verbose=True,
+        	monitor='val_loss',
+        	mode='min',
+    	)
 
 def main(args):
     h_params = SpeechRecognition.hyper_parameters
@@ -100,18 +112,20 @@ def main(args):
         speech_module = SpeechModule(model, args)
 
     logger = TensorBoardLogger(args.logdir, name='speech_recognition')
-    trainer = Trainer(logger=logger)
-
+    
     trainer = Trainer(
-        max_epochs=args.epochs, gpus=args.gpus,
-        num_nodes=args.nodes, distributed_backend=None,
-        logger=logger, gradient_clip_val=1.0,
-        val_check_interval=args.valid_every,
-        checkpoint_callback=checkpoint_callback(args),
-        resume_from_checkpoint=args.resume_from_checkpoint
+        max_epochs=args.epochs,
+	accelerator="gpu" if args.gpus>0 else "cpu",
+     	devices=args.gpus,
+	num_nodes=args.nodes,
+	strategy=args.dist_backend,
+	logger=logger,
+	gradient_clip_val=1.0,
+	val_check_interval=args.valid_every,
+	callbacks=[checkpoint_callback(args)],
     )
-    trainer.fit(speech_module)
-
+    ckpt = args.resume_from_checkpoint if args.resume_from_checkpoint else None
+	trainer.fit(speech_module, ckpt_path=ckpt)
 
 if __name__ == "__main__":
     parser = ArgumentParser()

@@ -2,7 +2,6 @@ import torch
 import torchaudio
 import torch.nn as nn
 import pandas as pd
-import numpy as np
 from utils import TextProcess
 
 
@@ -75,7 +74,9 @@ class Data(torch.utils.data.Dataset):
     parameters = {
         "sample_rate": 8000, "n_feats": 81,
         "specaug_rate": 0.5, "specaug_policy": 3,
-        "time_mask": 70, "freq_mask": 15 
+        "time_mask": 70, "freq_mask": 15
+        "max_spec_lens": 1650, # maximum allowed time‑bins
+        "max_channels":  1,      # only mono audio
     }
 
     def __init__(self, json_path, sample_rate, n_feats, specaug_rate, specaug_policy,
@@ -104,26 +105,41 @@ class Data(torch.utils.data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.item()
 
-        try:
-            file_path = self.data.key.iloc[idx]
-            waveform, _ = torchaudio.load(file_path)
-            label = self.text_process.text_to_int_sequence(self.data['text'].iloc[idx])
-            spectrogram = self.audio_transforms(waveform) # (channel, feature, time)
-            spec_len = spectrogram.shape[-1] // 2
-            label_len = len(label)
-            if spec_len < label_len:
-                raise Exception('spectrogram len is bigger then label len')
-            if spectrogram.shape[0] > 1:
-                raise Exception('dual channel, skipping audio file %s'%file_path)
-            if spectrogram.shape[2] > 1650:
-                raise Exception('spectrogram to big. size %s'%spectrogram.shape[2])
-            if label_len == 0:
-                raise Exception('label len is zero... skipping %s'%file_path)
-        except Exception as e:
-            if self.log_ex:
-                print(str(e), file_path)
-            return self.__getitem__(idx - 1 if idx != 0 else idx + 1)  
-        return spectrogram, label, spec_len, label_len
+        original_idx = idx
+        max_attempts = len(self.data)
+        attempts = 0
+
+        while attempts < max_attempts:
+            try:
+                file_path = self.data.iloc[idx]["key"]
+                waveform, _ = torchaudio.load(file_path)
+                label = self.text_process.text_to_int_sequence(self.data['text'].iloc[idx])
+                spectrogram = self.audio_transforms(waveform) # (channel, feature, time)
+                spec_len = spectrogram.shape[-1] // 2
+                label_len = len(label)
+                # after computing spec_len, label_len, etc.
+                max_len    = self.max_spec_len
+                max_ch     = self.max_channels
+
+                if spec_len < label_len:
+                    raise Exception("spectrogram length < label length")
+                if spectrogram.shape[0] > max_ch:
+                    raise Exception(f"too many channels ({spectrogram.shape[0]}); expected ≤{max_ch}")
+                if spectrogram.shape[2] > max_len:
+                    raise Exception(f"spectrogram too long ({spectrogram.shape[2]}); max is {max_len}")
+                if label_len == 0:
+                    raise Exception('label len is zero... skipping %s'%file_path)
+                return spectrogram, label, spec_len, label_len
+            
+            except Exception as e:
+                if self.log_ex:
+                    fp = locals().get("file_path", "Unknown")
+                    print(f"[idx={idx}] {e} – file: {fp}")
+                # move to previous index if possible, else next    
+                idx = idx - 1 if idx > 0 else idx + 1
+                attempts += 1
+        # if we exhaust the loop, no valid sample found
+        raise RuntimeError(f"No valid sample found after {max_attempts} tries, starting at index {original_idx}")
 
     def describe(self):
         return self.data.describe()
@@ -142,8 +158,6 @@ def collate_fn_padd(data):
     input_lengths = []
     label_lengths = []
     for (spectrogram, label, input_length, label_length) in data:
-        if spectrogram is None:
-            continue
        # print(spectrogram.shape)
         spectrograms.append(spectrogram.squeeze(0).transpose(0, 1))
         labels.append(torch.tensor(label, dtype=torch.long))

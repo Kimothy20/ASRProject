@@ -80,7 +80,7 @@ class Data(torch.utils.data.Dataset):
     }
 
     def __init__(self, json_path, sample_rate, n_feats, specaug_rate, specaug_policy,
-                time_mask, freq_mask, max_spec_len, max_channels, valid=False, shuffle=True, log_ex=True):
+                time_mask, freq_mask, max_spec_len, max_channels, valid=False, log_ex=True):
         self.log_ex = log_ex
         self.text_process = TextProcess()
         self.max_spec_len  = max_spec_len

@@ -74,16 +74,18 @@ class Data(torch.utils.data.Dataset):
     parameters = {
         "sample_rate": 8000, "n_feats": 81,
         "specaug_rate": 0.5, "specaug_policy": 3,
-        "time_mask": 70, "freq_mask": 15
-        "max_spec_lens": 1650, # maximum allowed time‑bins
+        "time_mask": 70, "freq_mask": 15,
+        "max_spec_len": 1650, # maximum allowed time‑bins
         "max_channels":  1,      # only mono audio
     }
 
     def __init__(self, json_path, sample_rate, n_feats, specaug_rate, specaug_policy,
-                time_mask, freq_mask, valid=False, shuffle=True, text_to_int=True, log_ex=True):
+                time_mask, freq_mask, max_spec_len, max_channels, valid=False, shuffle=True, log_ex=True):
         self.log_ex = log_ex
         self.text_process = TextProcess()
-
+        self.max_spec_len  = max_spec_len
+        self.max_channels  = max_channels
+                    
         print("Loading data json file from", json_path)
         self.data = pd.read_json(json_path, lines=True)
 
@@ -111,9 +113,11 @@ class Data(torch.utils.data.Dataset):
 
         while attempts < max_attempts:
             try:
-                file_path = self.data.iloc[idx]["key"]
+                row = self.data.iloc[idx]
+                file_path = row["key"]
                 waveform, _ = torchaudio.load(file_path)
-                label = self.text_process.text_to_int_sequence(self.data['text'].iloc[idx])
+                label_str = row["text"]
+                label = self.text_process.text_to_int_sequence(label_str)
                 spectrogram = self.audio_transforms(waveform) # (channel, feature, time)
                 spec_len = spectrogram.shape[-1] // 2
                 label_len = len(label)

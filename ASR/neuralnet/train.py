@@ -64,10 +64,11 @@ class SpeechModule(LightningModule):
         d_params.update(self.args.dparams_override)
         train_dataset = Data(json_path=self.args.train_file, **d_params)
         return DataLoader(dataset=train_dataset,
-                            batch_size=self.args.batch_size,
-                            num_workers=self.args.data_workers,
-                            pin_memory=True,
-                            collate_fn=collate_fn_padd)
+                        batch_size=self.args.batch_size,
+                        num_workers=self.args.data_worker,
+			shuffle=True,
+                        pin_memory=True,
+                        collate_fn=collate_fn_padd)
 
     def validation_step(self, batch, batch_idx):
         loss = self.step(batch)

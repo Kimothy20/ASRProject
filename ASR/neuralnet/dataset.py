@@ -61,7 +61,7 @@ class LogMelSpec(nn.Module):
 
     def forward(self, x):
         x = self.transform(x)  # mel spectrogram
-        x = np.log(x + 1e-14)  # logrithmic, add small value to avoid inf
+        x = torch.log(x + 1e-14)  # logrithmic, add small value to avoid inf
         return x
 
 
@@ -146,7 +146,7 @@ def collate_fn_padd(data):
             continue
        # print(spectrogram.shape)
         spectrograms.append(spectrogram.squeeze(0).transpose(0, 1))
-        labels.append(torch.Tensor(label))
+        labels.append(torch.tensor(label, dtype=torch.long))
         input_lengths.append(input_length)
         label_lengths.append(label_length)
 
@@ -158,4 +158,6 @@ def collate_fn_padd(data):
     # ## compute mask
     # mask = (batch != 0).cuda(gpu)
     # return batch, lengths, mask
+    input_lengths = torch.tensor(input_lengths, dtype=torch.long)
+    label_lengths = torch.tensor(label_lengths, dtype=torch.long)
     return spectrograms, labels, input_lengths, label_lengths
